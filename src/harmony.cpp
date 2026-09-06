@@ -7,6 +7,7 @@
 // by the ncores parameter via environment variables in the Python layer.
 
 #include "harmony.hpp"
+#include <cassert>
 #include <numeric>
 #include <set>
 #include <sstream>
@@ -134,7 +135,7 @@ Harmony::Harmony(
     }
 
     if (B_vec.size() > 1) {
-        covariate_bounds.resize(B_vec.size() - 1);
+        covariate_bounds.resize(B_vec.size());
         std::partial_sum(B_vec.begin(), B_vec.end(), covariate_bounds.begin());
     } else {
         covariate_bounds.push_back(B_vec.front());
@@ -434,6 +435,7 @@ void Harmony::moe_correct_ridge() {
         for (unsigned b = 0, current_cov = 0; b < static_cast<unsigned>(B); ++b) {
             if (current_cov < covariate_bounds.size() && !(b < covariate_bounds[current_cov]))
                 current_cov++;
+            assert(current_cov < cov_levels.size());
             if (arma::as_scalar(avg_R.row(b)) > batch_proportion_cutoff)
                 cov_levels[current_cov]++;
         }
@@ -446,6 +448,7 @@ void Harmony::moe_correct_ridge() {
         for (unsigned b = 0, current_cov = 0; b < static_cast<unsigned>(B); ++b) {
             if (current_cov < covariate_bounds.size() && !(b < covariate_bounds[current_cov]))
                 current_cov++;
+            assert(current_cov < cov_levels.size());
             if (arma::as_scalar(avg_R.row(b)) > batch_proportion_cutoff && cov_levels[current_cov] > 1)
                 keep.push_back(b);
         }
