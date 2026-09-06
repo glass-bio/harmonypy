@@ -491,6 +491,41 @@ void Harmony::moe_correct_ridge() {
             cov_mat(i + 1, 0) = Ok(i);
             cov_mat(i + 1, i + 1) = Ok(i);
         }
+
+        ROWTYPE Rk = R.row(k);
+        if (B_vec.size() > 1) {
+            // Complete X D X.t() for the retained one-hot rows. Unlike a
+            // single covariate, different covariates intersect in each cell.
+            // Row zero is the intercept; zero in batch_row means excluded.
+            std::vector<unsigned> batch_row(B, 0);
+            for (unsigned i = 0; i < Ok.n_elem; ++i)
+                batch_row[all_qualify ? i : keep[i]] = i + 1;
+
+            cov_mat(0, 0) = 0;
+            for (int j = 0; j < N; ++j) {
+                bool selected = false;
+                for (int c = 0; c < n_covariates; ++c) {
+                    unsigned row = batch_row[batch_ids(c, j)];
+                    if (row == 0) continue;
+                    selected = true;
+                    for (int other = c + 1; other < n_covariates; ++other) {
+                        unsigned col = batch_row[batch_ids(other, j)];
+                        if (col == 0) continue;
+                        cov_mat(row, col) += Rk(j);
+                        cov_mat(col, row) += Rk(j);
+                    }
+                }
+                // Pruned fits use the union of retained levels' cells.
+                // Count each cell once, even when several rows contain it.
+                if (selected) {
+                    cov_mat(0, 0) += Rk(j);
+                } else {
+                    // Rk is a working copy. Excluded cells belong to none of
+                    // the retained rows, so their intercept weight is zero.
+                    Rk(j) = 0;
+                }
+            }
+        }
         cov_mat += arma::diagmat(lamb_vec);
 
         MATTYPE inv_cov;
@@ -509,7 +544,6 @@ void Harmony::moe_correct_ridge() {
             inv_cov.diag() += b;
         }
 
-        ROWTYPE Rk = R.row(k);
         unsigned n_batches = all_qualify ? B : n_keep;
 
         std::vector<VECTYPE> z_sums(n_batches);
@@ -520,6 +554,11 @@ void Harmony::moe_correct_ridge() {
             const arma::uvec& idx = batch_index[b];
             z_sums[i] = Z_orig.cols(idx) * arma::conv_to<VECTYPE>::from(Rk.cols(idx).t());
             z_sum_all += z_sums[i];
+        }
+        if (B_vec.size() > 1) {
+            // Zero weights select the retained-cell union without gathering
+            // a d-by-N coordinate copy. The original assignments are unchanged.
+            z_sum_all = Z_orig * Rk.t();
         }
 
         W = inv_cov.unsafe_col(0) * z_sum_all.t();
