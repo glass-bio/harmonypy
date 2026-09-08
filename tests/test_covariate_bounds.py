@@ -1,35 +1,32 @@
-"""Regression for the multi-covariate boundary allocation."""
+"""Harmony should accept multiple correction columns for the same cells."""
 
 import numpy as np
 
 from harmonypy import run_harmony
 
 
-def test_covariate_bounds():
-    # Boilerplate: small, repeatable input (120 cells, 5 coordinates).
+def test_run_harmony_with_lab_and_day():
+    """Correcting for lab and day should return finite coordinates for every cell."""
+    n_cells = 120
     rng = np.random.default_rng(0)
-    data = rng.normal(size=(120, 5)) + 1.0
+    cell_coordinates = rng.normal(size=(n_cells, 5)) + 1.0
 
-    # Two correction columns: lab has 2 labels and day has 3.
-    meta = {"lab": rng.permutation(np.arange(120) % 2),
-            "day": rng.permutation(np.arange(120) % 3)}
+    # Model cells processed in two labs across three days. Each cell has
+    # both a lab label and a day label, which we want to correct for together.
+    metadata = {
+        "lab": rng.permutation(np.tile(["lab_a", "lab_b"], n_cells // 2)),
+        "day": rng.permutation(np.tile(["Monday", "Tuesday", "Wednesday"], n_cells // 3)),
+    }
 
-    # run_harmony constructs a C++ Harmony object. It groups the labels as:
-    #   [lab 0, lab 1, day 0, day 1, day 2]
-    # To track which column each label belongs to, it stores running counts:
-    #   B_vec = [2, 3] -> covariate_bounds = [2, 5].
-    # The old constructor used resize(B_vec.size() - 1), making room for
-    # only one number, then partial_sum tried to store both 2 and 5.
-    # The fix, resize(B_vec.size()), makes room for both numbers.
-    #
-    # The run settings keep the test short and repeatable.
+    # Keep both columns: one column takes a different constructor path and
+    # does not exercise storing the running label counts for multiple columns.
+    # The remaining settings keep the run short and repeatable.
     result = run_harmony(
-        data, meta, ["lab", "day"], nclust=4, lamb=1.0,
+        cell_coordinates, metadata, ["lab", "day"], nclust=4, lamb=1.0,
         max_iter_harmony=3, max_iter_kmeans=4,
         random_state=0, ncores=1, verbose=False,
     )
 
-    # ASan catches the original invalid write inside run_harmony, before
-    # these output checks run.
-    assert result.Z_corr.shape == data.shape
+    # Every input cell should still have five coordinates, all finite.
+    assert result.Z_corr.shape == cell_coordinates.shape
     assert np.isfinite(result.Z_corr).all()
