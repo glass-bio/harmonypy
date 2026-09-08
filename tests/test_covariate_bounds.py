@@ -10,12 +10,18 @@ def test_covariate_bounds():
     rng = np.random.default_rng(0)
     data = rng.normal(size=(120, 5)) + 1.0
 
-    # The trigger is selecting TWO columns: "lab" and "day".
-    # Their 2 and 3 labels give B_vec = [2, 3], so partial_sum writes [2, 5].
-    # The old code allocated only one entry in covariate_bounds for these two totals.
+    # Two correction columns: lab has 2 labels and day has 3.
     meta = {"lab": rng.permutation(np.arange(120) % 2),
             "day": rng.permutation(np.arange(120) % 3)}
 
+    # run_harmony constructs a C++ Harmony object. It groups the labels as:
+    #   [lab 0, lab 1, day 0, day 1, day 2]
+    # To track which column each label belongs to, it stores running counts:
+    #   B_vec = [2, 3] -> covariate_bounds = [2, 5].
+    # The old constructor used resize(B_vec.size() - 1), making room for
+    # only one number, then partial_sum tried to store both 2 and 5.
+    # The fix, resize(B_vec.size()), makes room for both numbers.
+    #
     # The run settings keep the test short and repeatable.
     result = run_harmony(
         data, meta, ["lab", "day"], nclust=4, lamb=1.0,
