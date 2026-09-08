@@ -114,6 +114,38 @@ def test_run_harmony_small():
     )
 
 
+def test_run_harmony_with_lab_and_day():
+    """Correcting for lab and day should return finite coordinates for every cell."""
+    n_cells = 120
+    n_coordinates = 5
+    random_seed = 0
+    lab_labels = ["lab_a", "lab_b"]
+    day_labels = ["Monday", "Tuesday", "Wednesday"]
+
+    # A small, repeatable example: each cell has coordinates, a lab and a day.
+    rng = np.random.default_rng(random_seed)
+    cell_coordinates = rng.normal(size=(n_cells, n_coordinates))
+    cell_metadata = {
+        "lab": rng.permutation(np.tile(lab_labels, n_cells // len(lab_labels))),
+        "day": rng.permutation(np.tile(day_labels, n_cells // len(day_labels))),
+    }
+
+    # Keep both correction columns: a single column bypasses the affected code.
+    # Limit iterations and use one thread to keep this test quick and repeatable.
+    result = hm.run_harmony(
+        cell_coordinates, cell_metadata, ["lab", "day"],
+        max_iter_harmony=2,
+        max_iter_kmeans=2,
+        random_state=random_seed,
+        ncores=1,
+        verbose=False,
+    )
+
+    corrected_coordinates = result.Z_corr
+    assert corrected_coordinates.shape == cell_coordinates.shape
+    assert np.isfinite(corrected_coordinates).all()
+
+
 def test_random_seed():
     print("\n" + "=" * 60)
     print("TEST: test_random_seed")
