@@ -126,6 +126,11 @@ private:
     void allocate_buffers();
     void build_batch_structures(const arma::Mat<int64_t>& batch_of_cell);
     void scatter_add_O(const MATTYPE& Rsub, const arma::Mat<arma::uword>& ids, float sign);
+    // Complete overlap/intercept terms before adding the ridge penalty, and
+    // mask the supplied working weights for cells outside the retained levels.
+    void prepare_multi_covariate_ridge(
+        MATTYPE& cov_mat, ROWTYPE& weights, const std::vector<unsigned>& keep
+    ) const;
 };
 
 } // namespace harmony

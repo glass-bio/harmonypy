@@ -422,6 +422,40 @@ bool Harmony::check_convergence(int i_type) {
 // moe_correct_ridge
 // =========================================================================
 
+void Harmony::prepare_multi_covariate_ridge(
+    MATTYPE& cov_mat, ROWTYPE& weights, const std::vector<unsigned>& keep
+) const {
+    // Complete X D X.t(): levels of different covariates can overlap.
+    // Map retained levels to design rows; zero marks an excluded level.
+    std::vector<unsigned> batch_row(B, 0);
+    for (unsigned i = 0; i < keep.size(); ++i)
+        batch_row[keep[i]] = i + 1;
+
+    cov_mat(0, 0) = 0;
+    for (int j = 0; j < N; ++j) {
+        bool selected = false;
+        for (int c = 0; c < n_covariates; ++c) {
+            unsigned row = batch_row[batch_ids(c, j)];
+            if (row == 0) continue;
+            selected = true;
+            for (int other = c + 1; other < n_covariates; ++other) {
+                unsigned col = batch_row[batch_ids(other, j)];
+                if (col == 0) continue;
+                cov_mat(row, col) += weights(j);
+                cov_mat(col, row) += weights(j);
+            }
+        }
+        // Fit the intercept on the union of retained levels' cells,
+        // counting each cell once even when several levels contain it.
+        if (selected) {
+            cov_mat(0, 0) += weights(j);
+        } else {
+            // Mask only this working copy, preserving the assignments.
+            weights(j) = 0;
+        }
+    }
+}
+
 void Harmony::moe_correct_ridge() {
     Z_corr = Z_orig;
 
@@ -491,35 +525,7 @@ void Harmony::moe_correct_ridge() {
 
         ROWTYPE Rk = R.row(k);
         if (B_vec.size() > 1) {
-            // Complete X D X.t(): levels of different covariates can overlap.
-            // Map retained levels to design rows; zero marks an excluded level.
-            std::vector<unsigned> batch_row(B, 0);
-            for (unsigned i = 0; i < Ok.n_elem; ++i)
-                batch_row[all_qualify ? i : keep[i]] = i + 1;
-
-            cov_mat(0, 0) = 0;
-            for (int j = 0; j < N; ++j) {
-                bool selected = false;
-                for (int c = 0; c < n_covariates; ++c) {
-                    unsigned row = batch_row[batch_ids(c, j)];
-                    if (row == 0) continue;
-                    selected = true;
-                    for (int other = c + 1; other < n_covariates; ++other) {
-                        unsigned col = batch_row[batch_ids(other, j)];
-                        if (col == 0) continue;
-                        cov_mat(row, col) += Rk(j);
-                        cov_mat(col, row) += Rk(j);
-                    }
-                }
-                // Fit the intercept on the union of retained levels' cells,
-                // counting each cell once even when several levels contain it.
-                if (selected) {
-                    cov_mat(0, 0) += Rk(j);
-                } else {
-                    // Mask only this working copy, preserving the assignments.
-                    Rk(j) = 0;
-                }
-            }
+            prepare_multi_covariate_ridge(cov_mat, Rk, keep);
         }
         cov_mat += arma::diagmat(lamb_vec);
 
