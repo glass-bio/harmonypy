@@ -422,11 +422,22 @@ bool Harmony::check_convergence(int i_type) {
 // moe_correct_ridge
 // =========================================================================
 
+/**
+ * Prepare the ridge fit when metadata groups share cells.
+ * A cell from lab A on Monday belongs to both groups. Include that shared
+ * cell weight in the fit, but count the cell once in the overall totals.
+ *
+ * cov_mat already contains the per-group totals. Add the shared-group
+ * weights and set the overall weight in its intercept entry (0, 0).
+ * keep gives the retained group IDs in matrix-row order, starting at row 1.
+ * Zero the working weights for cells in none of those groups, and return
+ * the retained cells' weighted coordinate sum. Call before adding the
+ * ridge penalty.
+ */
 VECTYPE Harmony::prepare_multi_covariate_ridge(
     MATTYPE& cov_mat, ROWTYPE& weights, const std::vector<unsigned>& keep
 ) const {
-    // Complete X D X.t(): levels of different covariates can overlap.
-    // Map retained levels to design rows; zero marks an excluded level.
+    // Map retained groups to matrix rows; zero marks an excluded group.
     std::vector<unsigned> batch_row(B, 0);
     for (unsigned i = 0; i < keep.size(); ++i)
         batch_row[keep[i]] = i + 1;
@@ -558,6 +569,10 @@ void Harmony::moe_correct_ridge() {
             unsigned b = all_qualify ? i : keep[i];
             const arma::uvec& idx = batch_index[b];
             z_sums[i] = Z_orig.cols(idx) * arma::conv_to<VECTYPE>::from(Rk.cols(idx).t());
+            // With one metadata column, each cell belongs to one group, so
+            // adding the group sums counts each retained cell once. With
+            // lab and day, cells appear in both sets of groups; the helper
+            // has already computed z_sum_all without counting them twice.
             if (B_vec.size() == 1) z_sum_all += z_sums[i];
         }
 
