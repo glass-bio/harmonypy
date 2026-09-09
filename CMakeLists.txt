@@ -8,6 +8,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Optimization flags
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 
+# Optional AddressSanitizer + UndefinedBehaviorSanitizer build (CI / debugging).
+# Enable with: pip install -e . -C cmake.define.HARMONYPY_SANITIZE=ON
+# The extension must then be imported with the ASan runtime preloaded; see the
+# "asan" job in .github/workflows/python-package.yml.
+option(HARMONYPY_SANITIZE "Build with AddressSanitizer and UBSan" OFF)
+if(HARMONYPY_SANITIZE)
+    message(STATUS "Building with AddressSanitizer + UBSan")
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all
+                        -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
 # Find Python and nanobind
 find_package(Python 3.9 REQUIRED COMPONENTS Interpreter Development.Module
     OPTIONAL_COMPONENTS Development.SABIModule)
