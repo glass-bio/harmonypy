@@ -147,6 +147,20 @@ def test_run_harmony_with_lab_and_day():
     assert np.isfinite(corrected_coordinates).all()
 
 
+def test_ridge_does_not_reverse_two_cells():
+    values = np.array([[1.0], [3.0]])
+    metadata = {"lab": ["A", "B"], "day": ["Monday", "Tuesday"]}
+    result = hm.run_harmony(
+        values, metadata, ["lab", "day"],
+        nclust=1, max_iter_harmony=1, max_iter_kmeans=0,
+        lamb=0.5, sigma=np.ones(1), ncores=1, verbose=False,
+    )
+
+    # In this symmetric example, ridge should bring the values closer without
+    # reversing their order. Before the fix, they become [2.33, 1.67].
+    assert result.Z_corr[0, 0] < result.Z_corr[1, 0]
+
+
 def test_random_seed():
     print("\n" + "=" * 60)
     print("TEST: test_random_seed")
