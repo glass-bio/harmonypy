@@ -134,7 +134,7 @@ Harmony::Harmony(
     }
 
     if (B_vec.size() > 1) {
-        covariate_bounds.resize(B_vec.size() - 1);
+        covariate_bounds.resize(B_vec.size());
         std::partial_sum(B_vec.begin(), B_vec.end(), covariate_bounds.begin());
     } else {
         covariate_bounds.push_back(B_vec.front());
