@@ -1,3 +1,19 @@
+# 2.0.1 - 2026-09-09
+
+### Fixed
+- Fixed a memory-corruption bug when correcting for more than one covariate
+  (e.g. lab and processing day). `covariate_bounds` was allocated one element
+  too small, so `std::partial_sum` wrote one entry past the end of the buffer —
+  undefined behavior that could silently corrupt memory or crash. The
+  correction results are unchanged. Thanks to @jkhales for finding and fixing
+  this (#53).
+
+### Development
+- Added an AddressSanitizer + UndefinedBehaviorSanitizer CI job that builds the
+  extension with `-fsanitize=address,undefined` and runs the test suite under
+  the sanitizer runtime, so memory errors like the one above fail CI. Build it
+  locally with `pip install -e . -C cmake.define.HARMONYPY_SANITIZE=ON`.
+
 # 2.0.0 - 2026-04-22
 
 Complete rewrite with C++ backend ([Armadillo](https://arma.sourceforge.net/) +
