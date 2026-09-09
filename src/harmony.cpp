@@ -422,7 +422,7 @@ bool Harmony::check_convergence(int i_type) {
 // moe_correct_ridge
 // =========================================================================
 
-void Harmony::prepare_multi_covariate_ridge(
+VECTYPE Harmony::prepare_multi_covariate_ridge(
     MATTYPE& cov_mat, ROWTYPE& weights, const std::vector<unsigned>& keep
 ) const {
     // Complete X D X.t(): levels of different covariates can overlap.
@@ -454,6 +454,10 @@ void Harmony::prepare_multi_covariate_ridge(
             weights(j) = 0;
         }
     }
+
+    // Count each retained cell once in the weighted coordinate sum too,
+    // without gathering a full copy of those cells' coordinates.
+    return Z_orig * weights.t();
 }
 
 void Harmony::moe_correct_ridge() {
@@ -524,8 +528,9 @@ void Harmony::moe_correct_ridge() {
         }
 
         ROWTYPE Rk = R.row(k);
+        VECTYPE z_sum_all(d, arma::fill::zeros);
         if (B_vec.size() > 1) {
-            prepare_multi_covariate_ridge(cov_mat, Rk, keep);
+            z_sum_all = prepare_multi_covariate_ridge(cov_mat, Rk, keep);
         }
         cov_mat += arma::diagmat(lamb_vec);
 
@@ -548,18 +553,12 @@ void Harmony::moe_correct_ridge() {
         unsigned n_batches = all_qualify ? B : n_keep;
 
         std::vector<VECTYPE> z_sums(n_batches);
-        VECTYPE z_sum_all(d, arma::fill::zeros);
 
         for (unsigned i = 0; i < n_batches; ++i) {
             unsigned b = all_qualify ? i : keep[i];
             const arma::uvec& idx = batch_index[b];
             z_sums[i] = Z_orig.cols(idx) * arma::conv_to<VECTYPE>::from(Rk.cols(idx).t());
-            z_sum_all += z_sums[i];
-        }
-        if (B_vec.size() > 1) {
-            // Count the retained-cell union once in X D Z.t() too, without
-            // gathering a full copy of those cells' coordinates.
-            z_sum_all = Z_orig * Rk.t();
+            if (B_vec.size() == 1) z_sum_all += z_sums[i];
         }
 
         W = inv_cov.unsafe_col(0) * z_sum_all.t();
