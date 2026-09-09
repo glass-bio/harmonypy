@@ -130,7 +130,8 @@ def test_run_harmony_with_lab_and_day():
         "day": rng.permutation(np.tile(day_labels, n_cells // len(day_labels))),
     }
 
-    # Consider running this test with ASan to check for the original memory error.
+    # This test must run against an ASan build to detect the memory error
+    # that motivated it.
     # Limit iterations and use one thread to keep this test quick and repeatable.
     result = hm.run_harmony(
         cell_coordinates, cell_metadata, ["lab", "day"],
