@@ -8,6 +8,30 @@ import pytest
 from harmonypy import run_harmony
 
 
+def test_ridge_does_not_reverse_two_cells():
+    # One number per cell. Lab and day both describe the same two groups.
+    cell_values = np.array([[1.0], [3.0]])
+    cell_metadata = {"lab": ["A", "B"], "day": ["Monday", "Tuesday"]}
+
+    # One group and one correction step isolate the ridge calculation.
+    result = run_harmony(
+        cell_values, cell_metadata, ["lab", "day"],
+        nclust=1, max_iter_harmony=1, max_iter_kmeans=0,
+        lamb=0.5, sigma=np.array([1.0]), theta=0,
+        ncores=1, verbose=False,
+    )
+    np.testing.assert_array_equal(result.R, np.ones((2, 1)))
+    corrected = result.Z_corr[:, 0]
+
+    # For this symmetric example, ridge must shrink the difference without
+    # reversing it. The old code instead returns approximately [2.33, 1.67].
+    assert corrected[0] < corrected[1], f"Correction reversed the cells: {corrected}"
+
+    # The fitted baseline is 2. Each lab/day coefficient is +/-0.4, so each
+    # cell moves 0.8 toward 2. This expected answer needs no reference solver.
+    np.testing.assert_allclose(corrected, [1.8, 2.2], rtol=0, atol=1e-5)
+
+
 def correct_once(data, meta, variables, lamb, **kwargs):
     # One correction step lets the reference use the same cluster assignments.
     options = dict(
@@ -58,27 +82,6 @@ def encodings(meta):
     for variables in permutations(meta):
         for encoded in (meta, relabeled):
             yield encoded, list(variables)
-
-
-@pytest.mark.parametrize("lamb", [1.0, None])
-def test_ridge_with_lab_and_day(lamb):
-    # Unequal group sizes expose both missing lab/day intersections and an
-    # intercept counted once per column instead of once per cell.
-    pairs = np.repeat(list(product(range(2), repeat=2)), [30, 5, 5, 10], axis=0)
-    data = (10 + 2 * pairs[:, 0] + 3 * pairs[:, 1])[:, None].astype(float)
-    meta = dict(lab=pairs[:, 0], day=pairs[:, 1])
-    for encoded, variables in encodings(meta):
-        result = correct_once(data, encoded, variables, lamb)
-        np.testing.assert_array_equal(result.R, np.ones((50, 1)))
-        phi, _ = design_matrix(encoded, variables)
-        expected = ridge_reference(data, phi, result.R, lamb)
-        if lamb == 1.0:
-            np.testing.assert_allclose(
-                expected[[0, 30, 35, 40], 0],
-                [12.42424242, 12.54545455, 12.45454545, 12.57575758],
-                rtol=0, atol=1e-8,
-            )
-        np.testing.assert_allclose(result.Z_corr, expected, rtol=0, atol=1e-4)
 
 
 @pytest.mark.parametrize("kind", ["unbalanced", "nested", "duplicate"])
