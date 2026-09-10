@@ -565,9 +565,7 @@ void Harmony::moe_correct_ridge() {
             unsigned b = all_qualify ? i : keep[i];
             const arma::uvec& idx = batch_index[b];
             z_sums[i] = Z_orig.cols(idx) * arma::conv_to<VECTYPE>::from(Rk.cols(idx).t());
-            // With one column, groups do not overlap, so their sums count each
-            // retained cell once. For multiple columns, the helper already
-            // computed that total.
+            // Sum here only when the helper has not already filled z_sum_all.
             if (!multiple_covariates) z_sum_all += z_sums[i];
         }
 
