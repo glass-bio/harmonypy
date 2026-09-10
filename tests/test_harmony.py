@@ -156,8 +156,8 @@ def test_ridge_does_not_reverse_two_cells():
         lamb=0.5, sigma=np.ones(1), ncores=1, verbose=False,
     )
 
-    # In this symmetric example, ridge should bring the values closer without
-    # reversing their order. Before the fix, they become [2.33, 1.67].
+    # With equal weights and penalties, these values should move closer
+    # without reversing their order.
     assert result.Z_corr[0, 0] < result.Z_corr[1, 0]
 
 

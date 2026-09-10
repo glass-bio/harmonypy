@@ -423,16 +423,13 @@ bool Harmony::check_convergence(int i_type) {
 // =========================================================================
 
 /**
- * Prepare the ridge fit when metadata groups share cells.
- * A cell from lab A on Monday belongs to both groups. Include that shared
- * cell weight in the fit, but count the cell once in the overall totals.
+ * Prepare ridge terms for groups that share cells, such as lab A and Monday.
+ * Include their overlap in the fit, but count each cell once in overall totals.
  *
- * cov_mat already contains the per-group totals. Add the shared-group
- * weights and set the overall weight in its intercept entry (0, 0).
- * keep gives the retained group IDs in matrix-row order, starting at row 1.
- * Zero the working weights for cells in none of those groups, and return
- * the retained cells' weighted coordinate sum. Call before adding the
- * ridge penalty.
+ * cov_mat contains the group totals. Add the overlap weights and recompute
+ * its intercept weight before adding the ridge penalty.
+ * Zero working weights for cells outside the groups in keep, then return
+ * the retained cells' weighted coordinate sum.
  */
 VECTYPE Harmony::prepare_multi_covariate_ridge(
     MATTYPE& cov_mat, ROWTYPE& weights, const std::vector<unsigned>& keep
@@ -456,18 +453,15 @@ VECTYPE Harmony::prepare_multi_covariate_ridge(
                 cov_mat(col, row) += weights(j);
             }
         }
-        // Fit the intercept on the union of retained levels' cells,
-        // counting each cell once even when several levels contain it.
+        // Count each cell once, even if it belongs to several retained groups.
         if (selected) {
             cov_mat(0, 0) += weights(j);
         } else {
-            // Mask only this working copy, preserving the assignments.
             weights(j) = 0;
         }
     }
 
-    // Count each retained cell once in the weighted coordinate sum too,
-    // without gathering a full copy of those cells' coordinates.
+    // Zero weights exclude cells without copying their coordinates.
     return Z_orig * weights.t();
 }
 
@@ -538,12 +532,8 @@ void Harmony::moe_correct_ridge() {
             cov_mat(i + 1, i + 1) = Ok(i);
         }
 
-        // Copy this cluster's cell weights so the helper can exclude cells
-        // without changing the original assignments in R.
+        // Work on a copy so masking does not change the cluster assignments.
         ROWTYPE Rk = R.row(k);
-        // Create d zeros: one slot for each coordinate's weighted total.
-        // The helper fills this vector here for multiple metadata columns;
-        // with one column, the group loop below adds into it instead.
         VECTYPE z_sum_all(d, arma::fill::zeros);
         if (B_vec.size() > 1) {
             z_sum_all = prepare_multi_covariate_ridge(cov_mat, Rk, keep);
@@ -568,23 +558,18 @@ void Harmony::moe_correct_ridge() {
 
         unsigned n_batches = all_qualify ? B : n_keep;
 
-        // One vector of coordinate totals per retained group; z_sums[i]
-        // is the whole vector for group i.
         std::vector<VECTYPE> z_sums(n_batches);
 
         for (unsigned i = 0; i < n_batches; ++i) {
             unsigned b = all_qualify ? i : keep[i];
             const arma::uvec& idx = batch_index[b];
             z_sums[i] = Z_orig.cols(idx) * arma::conv_to<VECTYPE>::from(Rk.cols(idx).t());
-            // With one metadata column, each cell belongs to one group, so
-            // adding these vectors coordinate by coordinate counts each
-            // retained cell once. With lab and day, cells appear in both
-            // sets of groups; the helper already computed that total once.
+            // With one column, groups do not overlap, so their sums count each
+            // retained cell once. For multiple columns, the helper already
+            // computed that total.
             if (B_vec.size() == 1) z_sum_all += z_sums[i];
         }
 
-        // .t() turns the column vector of coordinate totals into a row
-        // for the matrix product; it still contains one value per coordinate.
         W = inv_cov.unsafe_col(0) * z_sum_all.t();
         for (unsigned i = 0; i < n_batches; ++i) {
             W += inv_cov.unsafe_col(i + 1) * z_sums[i].t();
