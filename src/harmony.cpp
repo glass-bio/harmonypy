@@ -467,6 +467,7 @@ VECTYPE Harmony::prepare_multi_covariate_ridge(
 
 void Harmony::moe_correct_ridge() {
     Z_corr = Z_orig;
+    const bool multiple_covariates = B_vec.size() > 1;
 
     for (int k = 0; k < K; ++k) {
         VECTYPE avg_R = O.row(k).t() / batch_sizes;
@@ -535,13 +536,13 @@ void Harmony::moe_correct_ridge() {
         // Work on a copy so masking does not change the cluster assignments.
         ROWTYPE Rk = R.row(k);
         VECTYPE z_sum_all(d, arma::fill::zeros);
-        if (B_vec.size() > 1) {
+        if (multiple_covariates) {
             z_sum_all = prepare_multi_covariate_ridge(cov_mat, Rk, keep);
         }
         cov_mat += arma::diagmat(lamb_vec);
 
         MATTYPE inv_cov;
-        if (B_vec.size() > 1) {
+        if (multiple_covariates) {
             inv_cov = arma::inv(cov_mat);
         } else {
             VECTYPE ac = -cov_mat.row(0).as_col();
@@ -567,7 +568,7 @@ void Harmony::moe_correct_ridge() {
             // With one column, groups do not overlap, so their sums count each
             // retained cell once. For multiple columns, the helper already
             // computed that total.
-            if (B_vec.size() <= 1) z_sum_all += z_sums[i];
+            if (!multiple_covariates) z_sum_all += z_sums[i];
         }
 
         W = inv_cov.unsafe_col(0) * z_sum_all.t();
