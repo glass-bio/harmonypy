@@ -148,7 +148,7 @@ def test_run_harmony_with_lab_and_day():
 
 
 def test_ridge_does_not_reverse_two_cells():
-    values = np.array([[1.0], [3.0]])
+    values = np.array([[1.0], [2.0]])
     metadata = {"lab": ["A", "B"], "day": ["Monday", "Tuesday"]}
     result = hm.run_harmony(
         values, metadata, ["lab", "day"],
