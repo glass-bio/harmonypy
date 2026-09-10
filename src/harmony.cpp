@@ -567,7 +567,7 @@ void Harmony::moe_correct_ridge() {
             // With one column, groups do not overlap, so their sums count each
             // retained cell once. For multiple columns, the helper already
             // computed that total.
-            if (B_vec.size() == 1) z_sum_all += z_sums[i];
+            if (B_vec.size() <= 1) z_sum_all += z_sums[i];
         }
 
         W = inv_cov.unsafe_col(0) * z_sum_all.t();
