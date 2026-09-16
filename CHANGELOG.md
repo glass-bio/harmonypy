@@ -1,4 +1,4 @@
-# 2.0.2 - 2026-09-10
+# 2.0.2 - 2026-09-16
 
 ### Fixed
 - Fixed the ridge correction when correcting for more than one covariate
