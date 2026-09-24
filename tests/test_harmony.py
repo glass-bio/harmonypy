@@ -166,22 +166,22 @@ def test_ridge_does_not_reverse_two_cells():
     assert result.Z_corr[0, 0] < result.Z_corr[1, 0]
 
 
-def test_half_share_leaves_coordinates_unchanged():
+def test_at_limit_leaves_coordinates_unchanged():
     coordinates = np.array([[1.0], [2.0], [3.0], [4.0]])
     metadata = {
         "lab": ["a", "a", "b", "b"],
         "day": ["a", "b", "a", "b"],
     }
     n_clusters = 2
-    share = 1 / n_clusters
+    limit = 1 / n_clusters
     result = hm.run_harmony(
         coordinates, metadata, ["lab", "day"], nclust=n_clusters,
         max_iter_harmony=1, max_iter_kmeans=1, theta=0, lamb=1,
-        batch_prop_cutoff=share, ncores=1, verbose=False,
+        batch_prop_cutoff=limit, ncores=1, verbose=False,
     )
 
-    # A share at the cutoff does not trigger correction.
-    np.testing.assert_array_equal(result.R, np.full((len(coordinates), n_clusters), share))
+    # No lab or day is above the limit, so the coordinates stay unchanged.
+    np.testing.assert_array_equal(result.R, np.full((len(coordinates), n_clusters), limit))
     np.testing.assert_array_equal(result.Z_corr, coordinates)
 
 
