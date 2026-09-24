@@ -51,7 +51,6 @@ def test_binary_pair_coordinates(weak):
         reference = actual
 
 
-
 @pytest.mark.parametrize("weak", [False, True])
 def test_one_covariate_coordinates(weak):
     counts = (3000, 500, 500, 1000) if weak else (30, 5, 5, 10)
@@ -110,3 +109,14 @@ def test_unsupported_weak_penalty_fails_loudly():
     data = (10 + 2 * pairs[:, 0] + 3 * pairs[:, 1])[:, None].astype(float)
     with pytest.raises(RuntimeError, match="ridge accuracy"):
         run_once(data, dict(a=pairs[:, 0], b=pairs[:, 1]), ["a", "b"], 1e-12)
+
+
+def test_singular_fit_fails_and_retry_succeeds():
+    pairs = np.repeat(np.asarray(list(product(range(2), repeat=2))),
+                      (30, 5, 5, 10), axis=0)
+    data = (10 + 2 * pairs[:, 0] + 3 * pairs[:, 1])[:, None].astype(float)
+    meta = dict(a=pairs[:, 0], b=pairs[:, 1])
+    with pytest.raises(RuntimeError, match="ridge accuracy"):
+        run_once(data, meta, ["a", "b"], 0.0)
+    result = run_once(data, meta, ["a", "b"], 1.0)
+    check_oracle(data, meta, ["a", "b"], result, 1.0)

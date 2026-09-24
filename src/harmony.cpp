@@ -648,18 +648,28 @@ void Harmony::moe_correct_ridge() {
                 return false;
             const double matrix_norm = arma::norm(gram, "inf");
             const double inverse_norm = arma::norm(inverse, "inf");
-            // The factor of two below covers the change in the inverse only
-            // while the assembled matrix perturbation is below one half.
-            if (!std::isfinite(matrix_norm * inverse_norm)
-                || assembly_factor * matrix_norm * inverse_norm >= 0.5)
+            const double gamma_rows = (n_keep + 1) * eps / (1.0 - (n_keep + 1) * eps);
+            double matrix_terms_norm = matrix_norm;
+            for (double penalty : lamb_vec)
+                if (penalty < 0) matrix_terms_norm -= 2.0 * penalty;
+            const double matrix_error = assembly_factor * matrix_terms_norm * inverse_norm;
+            const double inverse_residual = arma::norm(
+                arma::eye<arma::mat>(gram.n_rows, gram.n_cols) - gram * inverse, "inf")
+                + gamma_rows * matrix_norm * inverse_norm;
+            // Both perturbations stay below one quarter, so twice the
+            // computed inverse norm bounds their combined effect.
+            if (!std::isfinite(matrix_error) || !std::isfinite(inverse_residual)
+                || matrix_error >= 0.25 || inverse_residual >= 0.25)
                 return false;
             const arma::mat residual = rhs - gram * coefficients;
             fit_error = 0.0;
             for (int p = 0; p < d; ++p) {
-                double assembly_scale = matrix_norm * arma::abs(coefficients.col(p)).max()
+                double coefficient_scale = arma::abs(coefficients.col(p)).max();
+                double assembly_scale = matrix_terms_norm * coefficient_scale
                                       + rhs_abs.col(p).max();
                 double column_error = 2.0 * n_covariates * inverse_norm
-                    * (arma::abs(residual.col(p)).max() + assembly_factor * assembly_scale);
+                    * (arma::abs(residual.col(p)).max() + assembly_factor * assembly_scale
+                       + gamma_rows * matrix_norm * coefficient_scale);
                 fit_error = std::max(fit_error, column_error);
             }
             return std::isfinite(fit_error) && coordinate_error_bound + fit_error <= 1e-4;
