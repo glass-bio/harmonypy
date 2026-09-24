@@ -167,22 +167,27 @@ def test_ridge_does_not_reverse_two_cells():
 
 
 def test_half_share_does_not_move_cells():
-    # The first two cells and the last two cells are groups 2 units apart.
+    # The first half and second half of the cells are two groups.
     coordinates = np.array([[1.0], [2.0], [3.0], [4.0]])
     metadata = {
         "lab": ["a", "a", "b", "b"],
         "day": ["a", "b", "a", "b"],
     }
+    n_clusters = 2
+    half = len(coordinates) // 2
+    share = 1 / n_clusters
     result = hm.run_harmony(
-        coordinates, metadata, ["lab", "day"], nclust=2,
+        coordinates, metadata, ["lab", "day"], nclust=n_clusters,
         max_iter_harmony=1, max_iter_kmeans=1, theta=0, lamb=1,
-        batch_prop_cutoff=0.5, ncores=1, verbose=False,
+        batch_prop_cutoff=share, ncores=1, verbose=False,
     )
 
-    # A 50% share does not exceed the 50% cutoff.
-    np.testing.assert_array_equal(result.R, np.full((4, 2), 0.5))
+    # A share at the cutoff does not trigger correction.
+    np.testing.assert_array_equal(result.R, np.full((len(coordinates), n_clusters), share))
     np.testing.assert_array_equal(result.Z_corr, coordinates)
-    assert result.Z_corr[2:].mean() - result.Z_corr[:2].mean() == 2.0
+    before = coordinates[half:].mean() - coordinates[:half].mean()
+    after = result.Z_corr[half:].mean() - result.Z_corr[:half].mean()
+    assert after == before
 
 
 def optimizer_case():
