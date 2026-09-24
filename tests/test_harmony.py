@@ -164,6 +164,59 @@ def test_ridge_does_not_reverse_two_cells():
     # With equal weights and penalties, these values should move closer
     # without reversing their order.
     assert result.Z_corr[0, 0] < result.Z_corr[1, 0]
+
+
+@pytest.mark.parametrize(
+    ("columns", "reordered"),
+    [
+        (("a",), None),
+        (("a", "b"), ("b", "a")),
+        (("a", "b", "c"), ("c", "a", "b")),
+    ],
+)
+def test_pruning_uses_each_level_count(columns, reordered):
+    # All normalized coordinates are identical, so both clusters assign
+    # exactly half of every cell to each level. Original coordinates differ
+    # so an included level produces a visible correction.
+    coordinates = np.array([[1.0], [2.0], [3.0], [4.0]])
+    metadata = {
+        "a": ["a", "a", "b", "b"],
+        "b": ["a", "b", "a", "b"],
+        "c": ["a", "b", "b", "a"],
+    }
+
+    def correct(cutoff, order=columns):
+        return hm.run_harmony(
+            coordinates, metadata, list(order), nclust=2,
+            max_iter_harmony=1, max_iter_kmeans=1, theta=0, lamb=1,
+            sigma=0.1, batch_prop_cutoff=cutoff, random_state=0,
+            ncores=1, verbose=False,
+        )
+
+    excluded = correct(0.75)
+    included = correct(0.49)
+
+    np.testing.assert_array_equal(excluded.R, np.full((4, 2), 0.5))
+    np.testing.assert_array_equal(included.R, np.full((4, 2), 0.5))
+    np.testing.assert_array_equal(excluded.Z_corr, coordinates)
+    assert np.max(np.abs(included.Z_corr - coordinates)) > 0.1
+
+    if len(columns) == 1:
+        # Captured from the one-covariate result before the denominator fix.
+        np.testing.assert_allclose(
+            included.Z_corr[:, 0], [1.5, 2.5, 2.5, 3.5], atol=1e-6
+        )
+    else:
+        excluded_reordered = correct(0.75, reordered)
+        included_reordered = correct(0.49, reordered)
+        np.testing.assert_array_equal(excluded_reordered.R, excluded.R)
+        np.testing.assert_array_equal(included_reordered.R, included.R)
+        np.testing.assert_array_equal(excluded_reordered.Z_corr, coordinates)
+        np.testing.assert_allclose(
+            included_reordered.Z_corr, included.Z_corr, atol=1e-6
+        )
+
+
 def optimizer_case():
     data_mat = np.array(
         [[1.0, 0.0], [0.8, 0.2], [0.0, 1.0],
