@@ -7,6 +7,7 @@
 // by the ncores parameter via environment variables in the Python layer.
 
 #include "harmony.hpp"
+#include <limits>
 #include <numeric>
 #include <set>
 #include <sstream>
@@ -193,7 +194,7 @@ Harmony::Harmony(
     block_size(static_cast<float>(block_size)),
     verbose(verbose),
     window_size(3),
-    alpha(static_cast<float>(alpha_in)),
+    alpha(alpha_in),
     batch_proportion_cutoff(static_cast<float>(batch_proportion_cutoff)),
     B_vec(B_vec_in),
     log_fn(std::move(log_fn_in)),
@@ -216,7 +217,7 @@ Harmony::Harmony(
         lambda.zeros(B + 1);
     } else {
         lambda_estimation = false;
-        lambda = arma::conv_to<VECTYPE>::from(lambda_in);
+        lambda = lambda_in;
     }
 
     if (B_vec.size() > 1) {
@@ -495,52 +496,18 @@ bool Harmony::check_convergence(int i_type) {
 // moe_correct_ridge
 // =========================================================================
 
-/**
- * Prepare ridge terms for groups that share cells, such as lab A and Monday.
- * Include their overlap in the fit, but count each cell once in overall totals.
- *
- * cov_mat contains the group totals. Add the overlap weights and recompute
- * its intercept weight before adding the ridge penalty.
- * Zero working weights for cells outside the groups in keep, then return
- * the retained cells' weighted coordinate sum.
- */
-VECTYPE Harmony::prepare_multi_covariate_ridge(
-    MATTYPE& cov_mat, ROWTYPE& weights, const std::vector<unsigned>& keep
-) const {
-    // Map retained groups to matrix rows; zero marks an excluded group.
-    std::vector<unsigned> batch_row(B, 0);
-    for (unsigned i = 0; i < keep.size(); ++i)
-        batch_row[keep[i]] = i + 1;
-
-    cov_mat(0, 0) = 0;
-    for (int j = 0; j < N; ++j) {
-        bool selected = false;
-        for (int c = 0; c < n_covariates; ++c) {
-            unsigned row = batch_row[batch_ids(c, j)];
-            if (row == 0) continue;
-            selected = true;
-            for (int other = c + 1; other < n_covariates; ++other) {
-                unsigned col = batch_row[batch_ids(other, j)];
-                if (col == 0) continue;
-                cov_mat(row, col) += weights(j);
-                cov_mat(col, row) += weights(j);
-            }
-        }
-        // Count each cell once, even if it belongs to several retained groups.
-        if (selected) {
-            cov_mat(0, 0) += weights(j);
-        } else {
-            weights(j) = 0;
-        }
-    }
-
-    // Zero weights exclude cells without copying their coordinates.
-    return Z_orig * weights.t();
-}
-
 void Harmony::moe_correct_ridge() {
     Z_corr = Z_orig;
-    const bool multiple_covariates = B_vec.size() > 1;
+    double coordinate_error_bound = 0.0;
+    struct RidgeFit {
+        std::vector<unsigned> batch_row;
+        arma::mat coefficients;
+        int cluster;
+    };
+    std::vector<RidgeFit> fits;
+    fits.reserve(K);
+    arma::rowvec max_abs_input = arma::conv_to<arma::rowvec>::from(
+        arma::max(arma::abs(Z_orig), 1).t());
 
     for (int k = 0; k < K; ++k) {
         VECTYPE avg_R = O.row(k).t() / batch_sizes;
@@ -570,98 +537,187 @@ void Harmony::moe_correct_ridge() {
         if (active_covariates == 0) continue;
 
         unsigned n_keep = keep.size();
-        bool all_qualify = (n_keep == static_cast<unsigned>(B));
-
-        VECTYPE lamb_vec;
-        if (all_qualify) {
-            lamb_vec = lambda_estimation ? find_lambda(alpha, VECTYPE(E.row(k).t())) : lambda;
+        arma::vec lamb_vec(n_keep + 1, arma::fill::zeros);
+        if (lambda_estimation) {
+            double mass = 0.0, compensation = 0.0;
+            for (int j = 0; j < N; ++j) {
+                double corrected = static_cast<double>(R(k, j)) - compensation;
+                double next = mass + corrected;
+                compensation = (next - mass) - corrected;
+                mass = next;
+            }
+            for (unsigned i = 0; i < n_keep; ++i)
+                lamb_vec(i + 1) = alpha * mass * batch_index[keep[i]].n_elem / N;
         } else {
-            arma::uvec keep_batch = arma::conv_to<arma::uvec>::from(keep);
-            if (lambda_estimation) {
-                VECTYPE Esub = VECTYPE(E.row(k).t());
-                Esub = Esub.rows(keep_batch);
-                lamb_vec = find_lambda(alpha, Esub);
-            } else {
-                VECTYPE ltmp(n_keep + 1);
-                ltmp(0) = 0;
-                ltmp.subvec(1, n_keep) = lambda.rows(keep_batch + 1);
-                lamb_vec = ltmp;
+            for (unsigned i = 0; i < n_keep; ++i)
+                lamb_vec(i + 1) = lambda(keep[i] + 1);
+        }
+
+        // Fit with the original float32 coordinates and assignments, but
+        // accumulate and solve in float64. Forming an inverse in float32 loses
+        // substantial direct-coordinate accuracy when the penalty is weak.
+        std::vector<unsigned> batch_row(B, 0);
+        for (unsigned i = 0; i < n_keep; ++i) batch_row[keep[i]] = i + 1;
+        arma::mat gram(n_keep + 1, n_keep + 1, arma::fill::zeros);
+        arma::mat rhs(n_keep + 1, d, arma::fill::zeros);
+        arma::mat rhs_abs(rhs.n_rows, rhs.n_cols, arma::fill::zeros);
+        auto compensated_add = [](double& sum, double& compensation, double value) {
+            double corrected = value - compensation;
+            double next = sum + corrected;
+            compensation = (next - sum) - corrected;
+            sum = next;
+        };
+        auto assemble = [&](bool compensated) {
+            gram.zeros();
+            rhs.zeros();
+            rhs_abs.zeros();
+            if (!compensated && n_covariates == 1) {
+                // One covariate has disjoint groups. Use a double-precision
+                // matrix-vector product for each group and sum those rows for
+                // the intercept; this avoids a cell-by-cell coordinate loop.
+                for (unsigned i = 0; i < n_keep; ++i) {
+                    unsigned row = i + 1;
+                    const arma::uvec& idx = batch_index[keep[i]];
+                    arma::vec weights(idx.n_elem);
+                    for (arma::uword pos = 0; pos < idx.n_elem; ++pos)
+                        weights(pos) = R(k, idx(pos));
+                    double mass = arma::accu(weights);
+                    gram(0, 0) += mass;
+                    gram(0, row) = mass;
+                    gram(row, 0) = mass;
+                    gram(row, row) = mass;
+                    arma::mat coordinates = arma::conv_to<arma::mat>::from(Z_orig.cols(idx));
+                    rhs.row(row) = (coordinates * weights).t();
+                    rhs.row(0) += rhs.row(row);
+                    rhs_abs.row(row) = mass * max_abs_input;
+                    rhs_abs.row(0) += rhs_abs.row(row);
+                }
+                gram.diag() += lamb_vec;
+                return;
+            }
+            arma::mat gram_comp, rhs_comp;
+            if (compensated) {
+                gram_comp.zeros(gram.n_rows, gram.n_cols);
+                rhs_comp.zeros(rhs.n_rows, rhs.n_cols);
+            }
+            std::vector<unsigned> rows;
+            rows.reserve(n_covariates + 1);
+            for (int j = 0; j < N; ++j) {
+                rows.clear();
+                rows.push_back(0);
+                for (int c = 0; c < n_covariates; ++c) {
+                    unsigned row = batch_row[batch_ids(c, j)];
+                    if (row != 0) rows.push_back(row);
+                }
+                if (rows.size() == 1) continue;
+                const double weight = R(k, j);
+                for (unsigned row : rows) {
+                    for (unsigned col : rows) {
+                        if (compensated)
+                            compensated_add(gram(row, col), gram_comp(row, col), weight);
+                        else
+                            gram(row, col) += weight;
+                    }
+                    for (int p = 0; p < d; ++p) {
+                        double term = weight * static_cast<double>(Z_orig(p, j));
+                        if (compensated)
+                            compensated_add(rhs(row, p), rhs_comp(row, p), term);
+                        else
+                            rhs(row, p) += term;
+                        rhs_abs(row, p) += std::abs(term);
+                    }
+                }
+            }
+            gram.diag() += lamb_vec;
+        };
+
+        arma::mat coefficients;
+        const double eps = std::numeric_limits<double>::epsilon();
+        double fit_error = 0.0;
+        auto assess = [&](double assembly_factor) {
+            double reciprocal_condition = arma::rcond(gram);
+            // At this condition, float64 roundoff can consume four digits.
+            if (!std::isfinite(reciprocal_condition) || reciprocal_condition < 1e-12)
+                return false;
+            if (!arma::solve(coefficients, gram, rhs,
+                             arma::solve_opts::likely_sympd + arma::solve_opts::no_approx)
+                || !coefficients.is_finite())
+                return false;
+            arma::mat inverse;
+            if (!arma::inv_sympd(inverse, gram) || !inverse.is_finite())
+                return false;
+            const double matrix_norm = arma::norm(gram, "inf");
+            const double inverse_norm = arma::norm(inverse, "inf");
+            // The factor of two below covers the change in the inverse only
+            // while the assembled matrix perturbation is below one half.
+            if (!std::isfinite(matrix_norm * inverse_norm)
+                || assembly_factor * matrix_norm * inverse_norm >= 0.5)
+                return false;
+            const arma::mat residual = rhs - gram * coefficients;
+            fit_error = 0.0;
+            for (int p = 0; p < d; ++p) {
+                double assembly_scale = matrix_norm * arma::abs(coefficients.col(p)).max()
+                                      + rhs_abs.col(p).max();
+                double column_error = 2.0 * n_covariates * inverse_norm
+                    * (arma::abs(residual.col(p)).max() + assembly_factor * assembly_scale);
+                fit_error = std::max(fit_error, column_error);
+            }
+            return std::isfinite(fit_error) && coordinate_error_bound + fit_error <= 1e-4;
+        };
+
+        // Ordinary float64 accumulation is faster. Rebuild with compensated
+        // sums when its conservative N-term error estimate uses the budget.
+        assemble(false);
+        double gamma_n = N * eps / (1.0 - N * eps);
+        if (!assess(8.0 * eps + 2.0 * gamma_n)) {
+            assemble(true);
+            if (!assess(8.0 * eps))
+                numerical_error("ridge accuracy", "cannot support 1e-4 absolute coordinate accuracy");
+        }
+        coordinate_error_bound += fit_error;
+
+        Y.col(k) = arma::conv_to<VECTYPE>::from(coefficients.row(0).t());
+        coefficients.row(0).zeros();
+        W = arma::conv_to<MATTYPE>::from(coefficients);
+        fits.push_back({std::move(batch_row), std::move(coefficients), k});
+    }
+
+    // Each cell receives one final float32 rounding, regardless of K.
+    double max_result = 0.0;
+    double max_sum_error = 0.0;
+    double terms = 1.0 + static_cast<double>(fits.size()) * n_covariates;
+    double gamma = terms * std::numeric_limits<double>::epsilon();
+    if (gamma >= 1.0)
+        numerical_error("ridge accuracy", "too many correction terms to bound accuracy");
+    gamma /= 1.0 - gamma;
+    std::vector<double> values(d), absolute_sums(d);
+    for (int j = 0; j < N; ++j) {
+        for (int p = 0; p < d; ++p) {
+            values[p] = Z_orig(p, j);
+            absolute_sums[p] = std::abs(values[p]);
+        }
+        for (const RidgeFit& fit : fits) {
+            double weight = R(fit.cluster, j);
+            for (int c = 0; c < n_covariates; ++c) {
+                unsigned row = fit.batch_row[batch_ids(c, j)];
+                if (row == 0) continue;
+                for (int p = 0; p < d; ++p) {
+                    double term = weight * fit.coefficients(row, p);
+                    values[p] -= term;
+                    absolute_sums[p] += std::abs(term);
+                }
             }
         }
-
-        unsigned mat_size = (all_qualify ? B : n_keep) + 1;
-        VECTYPE Ok(all_qualify ? B : n_keep);
-        if (all_qualify) {
-            Ok = VECTYPE(O.row(k).t());
-        } else {
-            for (unsigned i = 0; i < n_keep; ++i) Ok(i) = O(k, keep[i]);
-        }
-
-        MATTYPE cov_mat(mat_size, mat_size, arma::fill::zeros);
-        float Ok_sum = arma::accu(Ok);
-        cov_mat(0, 0) = Ok_sum;
-        for (unsigned i = 0; i < Ok.n_elem; ++i) {
-            cov_mat(0, i + 1) = Ok(i);
-            cov_mat(i + 1, 0) = Ok(i);
-            cov_mat(i + 1, i + 1) = Ok(i);
-        }
-
-        // Work on a copy so masking does not change the cluster assignments.
-        ROWTYPE Rk = R.row(k);
-        VECTYPE z_sum_all(d, arma::fill::zeros);
-        if (multiple_covariates) {
-            z_sum_all = prepare_multi_covariate_ridge(cov_mat, Rk, keep);
-        }
-        cov_mat += arma::diagmat(lamb_vec);
-
-        MATTYPE inv_cov;
-        if (multiple_covariates) {
-            inv_cov = arma::inv(cov_mat);
-        } else {
-            VECTYPE ac = -cov_mat.row(0).as_col();
-            ac(0) = 1;
-            float b0 = cov_mat(0, 0);
-            VECTYPE b = 1.0f / cov_mat.diag();
-            b(0) = 0;
-            float u = b0 - arma::accu(arma::square(ac) % b);
-            VECTYPE ac_b = ac % b;
-            ac_b(0) = 1;
-            inv_cov = (1.0f / u) * (ac_b * ac_b.t());
-            inv_cov.diag() += b;
-        }
-
-        unsigned n_batches = all_qualify ? B : n_keep;
-
-        std::vector<VECTYPE> z_sums(n_batches);
-
-        for (unsigned i = 0; i < n_batches; ++i) {
-            unsigned b = all_qualify ? i : keep[i];
-            const arma::uvec& idx = batch_index[b];
-            z_sums[i] = Z_orig.cols(idx) * arma::conv_to<VECTYPE>::from(Rk.cols(idx).t());
-            if (!multiple_covariates) z_sum_all += z_sums[i];
-        }
-
-        W = inv_cov.unsafe_col(0) * z_sum_all.t();
-        for (unsigned i = 0; i < n_batches; ++i) {
-            W += inv_cov.unsafe_col(i + 1) * z_sums[i].t();
-        }
-
-        Y.col(k) = W.row(0).t();
-        W.row(0).zeros();
-
-        if (all_qualify) {
-            for (int b = 0; b < B; ++b) {
-                const arma::uvec& idx = batch_index[b];
-                Z_corr.cols(idx) -= W.row(b + 1).t() * Rk.cols(idx);
-            }
-        } else {
-            for (unsigned i = 0; i < n_keep; ++i) {
-                unsigned b = keep[i];
-                const arma::uvec& idx = batch_index[b];
-                Z_corr.cols(idx) -= W.row(i + 1).t() * Rk.cols(idx);
-            }
+        for (int p = 0; p < d; ++p) {
+            max_sum_error = std::max(max_sum_error, gamma * absolute_sums[p]);
+            max_result = std::max(max_result, std::abs(values[p]));
+            Z_corr(p, j) = static_cast<float>(values[p]);
         }
     }
+    coordinate_error_bound += max_sum_error
+        + 0.5 * std::numeric_limits<float>::epsilon() * max_result;
+    if (!std::isfinite(coordinate_error_bound) || coordinate_error_bound > 1e-4)
+        numerical_error("ridge accuracy", "cannot support 1e-4 absolute coordinate accuracy");
 
     Y = arma::normalise(Y, 2, 0);
 }

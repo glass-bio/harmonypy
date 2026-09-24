@@ -22,12 +22,6 @@ typedef arma::Mat<float> MATTYPE;
 typedef arma::Col<float> VECTYPE;
 typedef arma::Row<float> ROWTYPE;
 
-inline VECTYPE find_lambda(float alpha, const VECTYPE& cluster_E) {
-    VECTYPE lambda_vec(cluster_E.n_elem + 1, arma::fill::zeros);
-    lambda_vec.subvec(1, lambda_vec.n_elem - 1) = cluster_E * alpha;
-    return lambda_vec;
-}
-
 MATTYPE kmeans_init(const MATTYPE& X, int K, std::mt19937& rng);
 bool objective_converged(float obj_old, float obj_new, float epsilon);
 MATTYPE assignment_logits(
@@ -61,9 +55,9 @@ public:
 
     VECTYPE sigma;
     VECTYPE theta;
-    VECTYPE lambda;
+    arma::vec lambda;
 
-    float alpha;
+    double alpha;
     bool lambda_estimation;
 
     int N, d, K, B;
@@ -129,9 +123,6 @@ private:
     void allocate_buffers();
     void build_batch_structures(const arma::Mat<int64_t>& batch_of_cell);
     void scatter_add_O(const MATTYPE& Rsub, const arma::Mat<arma::uword>& ids, float sign);
-    VECTYPE prepare_multi_covariate_ridge(
-        MATTYPE& cov_mat, ROWTYPE& weights, const std::vector<unsigned>& keep
-    ) const;
     void check_assignment_normalizers(const ROWTYPE& normalizers, const char* stage) const;
     void normalize_log_assignments(MATTYPE& logits, const char* stage) const;
     void check_state(const char* stage) const;

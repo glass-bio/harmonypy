@@ -113,6 +113,13 @@ sc.tl.leiden(adata)
 
 The `ncores` parameter controls BLAS threading (Accelerate on macOS, OpenBLAS on Linux). Default is 0 (use all available cores). Set `ncores=1` for single-threaded execution.
 
+Ridge correction accumulates and solves its weighted fit in float64. For each
+correction step, condition, residual, and rounding checks estimate absolute
+error below `1e-4` per coordinate relative to a dense float64 fit of the same
+float32 embedding and cluster assignments. If that limit cannot be supported,
+the call raises a `RuntimeError` containing `ridge accuracy`. Embedding storage
+and clustering still use float32.
+
 
 ## Performance
 

@@ -163,15 +163,15 @@ def run_harmony(
         lambda_estimation = True
         lamb = np.zeros(1, dtype=np.float32)
     elif isinstance(lamb, (float, int)):
-        lamb = np.repeat([lamb] * len(phi_n), phi_n).astype(np.float32)
-        lamb = np.insert(lamb, 0, 0).astype(np.float32)
+        lamb = np.repeat([lamb] * len(phi_n), phi_n).astype(np.float64)
+        lamb = np.insert(lamb, 0, 0).astype(np.float64)
     elif len(lamb) == len(phi_n):
-        lamb = np.repeat([lamb], phi_n).astype(np.float32)
-        lamb = np.insert(lamb, 0, 0).astype(np.float32)
+        lamb = np.repeat([lamb], phi_n).astype(np.float64)
+        lamb = np.insert(lamb, 0, 0).astype(np.float64)
     else:
-        lamb = np.asarray(lamb, dtype=np.float32)
+        lamb = np.asarray(lamb, dtype=np.float64)
         if len(lamb) == np.sum(phi_n):
-            lamb = np.insert(lamb, 0, 0).astype(np.float32)
+            lamb = np.insert(lamb, 0, 0).astype(np.float64)
 
     # Number of items in each category
     B = int(np.sum(phi_n))
