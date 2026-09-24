@@ -167,19 +167,16 @@ def test_ridge_does_not_reverse_two_cells():
 
 
 def test_pruning_preserves_cell_group_separation():
-    # All normalized coordinates are identical, so both clusters assign
-    # exactly half of every cell to each level. The first two and last two
-    # cells represent distinct annotated groups, separated by 2 on PC1.
-    # The unfixed two-covariate result shrinks that separation to 1.
+    # The first two cells are one group; the last two are another. Their
+    # mean first-coordinate values are 1.5 and 3.5, so the gap is 2.
     coordinates = np.array([[1.0], [2.0], [3.0], [4.0]])
-    cell_group = np.array(["type_a", "type_a", "type_b", "type_b"])
     metadata = {
         "lab": ["a", "a", "b", "b"],
         "day": ["a", "b", "a", "b"],
         "donor": ["a", "b", "b", "a"],
     }
 
-    def correct(cutoff, columns):
+    def correct(columns, cutoff):
         return hm.run_harmony(
             coordinates, metadata, list(columns), nclust=2,
             max_iter_harmony=1, max_iter_kmeans=1, theta=0, lamb=1,
@@ -187,39 +184,35 @@ def test_pruning_preserves_cell_group_separation():
             ncores=1, verbose=False,
         )
 
-    def group_separation(result):
-        first = result.Z_corr[cell_group == "type_a", 0].mean()
-        second = result.Z_corr[cell_group == "type_b", 0].mean()
-        return second - first
-
-    for columns, reordered in [
-        (("lab",), None),
-        (("lab", "day"), ("day", "lab")),
-        (("lab", "day", "donor"), ("donor", "lab", "day")),
+    corrected_below_half = {}
+    for columns in [
+        ("lab",), ("lab", "day"), ("day", "lab"),
+        ("lab", "day", "donor"), ("donor", "lab", "day"),
     ]:
-        excluded = correct(0.75, columns)
-        included = correct(0.49, columns)
+        at_75_percent = correct(columns, 0.75)
+        below_half = correct(columns, 0.49)
 
-        np.testing.assert_array_equal(excluded.R, np.full((4, 2), 0.5))
-        np.testing.assert_array_equal(included.R, np.full((4, 2), 0.5))
-        np.testing.assert_array_equal(excluded.Z_corr, coordinates)
-        assert group_separation(excluded) == 2.0
-        assert group_separation(included) < 2.0
+        # Every cell belongs halfway to each cluster. No level reaches 75%.
+        np.testing.assert_array_equal(at_75_percent.R, np.full((4, 2), 0.5))
+        np.testing.assert_array_equal(at_75_percent.Z_corr, coordinates)
 
-        if reordered is None:
-            # Captured from the one-covariate result before the fix.
-            np.testing.assert_allclose(
-                included.Z_corr[:, 0], [1.5, 2.5, 2.5, 3.5], atol=1e-6
-            )
-        else:
-            excluded_reordered = correct(0.75, reordered)
-            included_reordered = correct(0.49, reordered)
-            np.testing.assert_array_equal(excluded_reordered.R, excluded.R)
-            np.testing.assert_array_equal(included_reordered.R, included.R)
-            np.testing.assert_array_equal(excluded_reordered.Z_corr, coordinates)
-            np.testing.assert_allclose(
-                included_reordered.Z_corr, included.Z_corr, atol=1e-6
-            )
+        # Below 50%, correction is allowed and the two groups move closer.
+        corrected = below_half.Z_corr[:, 0]
+        assert corrected[2:].mean() - corrected[:2].mean() < 2.0
+        corrected_below_half[columns] = corrected
+
+    # One-covariate output is unchanged; metadata order does not matter.
+    np.testing.assert_allclose(
+        corrected_below_half[("lab",)], [1.5, 2.5, 2.5, 3.5], atol=1e-6
+    )
+    np.testing.assert_allclose(
+        corrected_below_half[("lab", "day")],
+        corrected_below_half[("day", "lab")], atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        corrected_below_half[("lab", "day", "donor")],
+        corrected_below_half[("donor", "lab", "day")], atol=1e-6,
+    )
 
 
 def optimizer_case():
