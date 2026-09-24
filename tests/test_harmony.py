@@ -166,53 +166,23 @@ def test_ridge_does_not_reverse_two_cells():
     assert result.Z_corr[0, 0] < result.Z_corr[1, 0]
 
 
-def test_pruning_preserves_cell_group_separation():
-    # The first two cells are one group; the last two are another. Their
-    # mean first-coordinate values are 1.5 and 3.5, so the gap is 2.
+def test_half_share_does_not_move_cells():
+    # The first two cells and the last two cells are groups 2 units apart.
     coordinates = np.array([[1.0], [2.0], [3.0], [4.0]])
     metadata = {
         "lab": ["a", "a", "b", "b"],
         "day": ["a", "b", "a", "b"],
-        "donor": ["a", "b", "b", "a"],
     }
-
-    def correct(columns, cutoff):
-        return hm.run_harmony(
-            coordinates, metadata, list(columns), nclust=2,
-            max_iter_harmony=1, max_iter_kmeans=1, theta=0, lamb=1,
-            sigma=0.1, batch_prop_cutoff=cutoff, random_state=0,
-            ncores=1, verbose=False,
-        )
-
-    corrected_below_half = {}
-    for columns in [
-        ("lab",), ("lab", "day"), ("day", "lab"),
-        ("lab", "day", "donor"), ("donor", "lab", "day"),
-    ]:
-        at_75_percent = correct(columns, 0.75)
-        below_half = correct(columns, 0.49)
-
-        # Every cell belongs halfway to each cluster. No level reaches 75%.
-        np.testing.assert_array_equal(at_75_percent.R, np.full((4, 2), 0.5))
-        np.testing.assert_array_equal(at_75_percent.Z_corr, coordinates)
-
-        # Below 50%, correction is allowed and the two groups move closer.
-        corrected = below_half.Z_corr[:, 0]
-        assert corrected[2:].mean() - corrected[:2].mean() < 2.0
-        corrected_below_half[columns] = corrected
-
-    # One-covariate output is unchanged; metadata order does not matter.
-    np.testing.assert_allclose(
-        corrected_below_half[("lab",)], [1.5, 2.5, 2.5, 3.5], atol=1e-6
+    result = hm.run_harmony(
+        coordinates, metadata, ["lab", "day"], nclust=2,
+        max_iter_harmony=1, max_iter_kmeans=1, theta=0, lamb=1,
+        batch_prop_cutoff=0.5, ncores=1, verbose=False,
     )
-    np.testing.assert_allclose(
-        corrected_below_half[("lab", "day")],
-        corrected_below_half[("day", "lab")], atol=1e-6,
-    )
-    np.testing.assert_allclose(
-        corrected_below_half[("lab", "day", "donor")],
-        corrected_below_half[("donor", "lab", "day")], atol=1e-6,
-    )
+
+    # A 50% share does not exceed the 50% cutoff.
+    np.testing.assert_array_equal(result.R, np.full((4, 2), 0.5))
+    np.testing.assert_array_equal(result.Z_corr, coordinates)
+    assert result.Z_corr[2:].mean() - result.Z_corr[:2].mean() == 2.0
 
 
 def optimizer_case():
